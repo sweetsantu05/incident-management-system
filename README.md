@@ -2,116 +2,152 @@
 
 ## 📌 Overview
 
-This project is a simplified **Incident Management System** designed to simulate how large-scale distributed systems handle failures.
+This project is a simplified **Incident Management System** inspired by real-world Site Reliability Engineering (SRE) practices.
 
-It ingests high-volume signals, groups them into incidents, tracks lifecycle, and enforces Root Cause Analysis (RCA) before closure.
+In large-scale distributed systems, thousands of signals (errors, latency spikes, crashes) are generated continuously. This system demonstrates how such signals can be:
+
+* Ingested efficiently at scale
+* Buffered and processed asynchronously
+* Grouped into meaningful incidents
+* Managed through a lifecycle
+* Resolved with structured Root Cause Analysis (RCA)
+
+The goal is to simulate how production systems maintain **reliability, stability, and observability under load**.
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture Diagram
 
+
+![alt text](image-1.png)
+
+Frontend (React Dashboard)
+        ↓
+FastAPI Backend (Async API)
+        ↓
+----------------------------
+| Signal Queue (Buffer)     |
+| - Handles bursts          |
+----------------------------
+        ↓
+----------------------------
+| Processing Engine         |
+| - Debounce Logic          |
+| - Incident Creation       |
+----------------------------
+        ↓
+----------------------------
+| In-Memory Storage         |
+| - Signals (Raw)           |
+| - Incidents (Structured)  |
+----------------------------
+        ↓
+----------------------------
+| Observability Layer       |
+| - /health endpoint        |
+| - Metrics logging         |
+----------------------------
 ```
-[Frontend (React)]
-        ↓
-[FastAPI Backend]
-        ↓
--------------------------
-| In-Memory Storage     |
-| (Incidents, Signals)  |
--------------------------
-        ↓
-[Simulated DB / Logs]
-```
+
+---
+
+## 🧠 Architecture Explanation
+
+### Flow
+
+1. **Frontend (React Dashboard)**
+   Displays incidents, allows interaction, and captures RCA inputs.
+
+2. **FastAPI Backend**
+   Handles ingestion, processing, and lifecycle transitions.
+
+3. **Signal Queue (Backpressure Buffer)**
+   Temporarily stores incoming signals to prevent overload.
+
+4. **Processing Engine**
+   Applies debounce logic and groups signals into incidents.
+
+5. **In-Memory Storage**
+   Stores signals (raw data) and incidents (structured records).
+
+6. **Observability Layer**
+   Provides health status and logs throughput metrics.
 
 ---
 
 ## ⚙️ Tech Stack
 
-* Backend: Python, FastAPI
-* Frontend: React.js
-* Storage: In-memory (for simulation)
-* API Testing: Swagger UI
+| Layer    | Technology |
+| -------- | ---------- |
+| Frontend | React.js   |
+| Backend  | FastAPI    |
+| Storage  | In-memory  |
+| API Docs | Swagger UI |
 
 ---
 
-## 🔥 Features Implemented
+## 🚀 Setup Instructions (Docker Compose)
 
-### ✅ Signal Ingestion
+### 1. docker-compose.yml
 
-* High-frequency signal ingestion via `/ingest`
-* Debouncing logic to group signals into incidents
+```yaml
+version: "3.9"
 
-### ✅ Incident Lifecycle
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
 
-* OPEN → INVESTIGATING → RESOLVED → CLOSED
-* RCA mandatory before closing
-
-### ✅ RCA & MTTR
-
-* Root Cause Analysis required
-* MTTR (Mean Time To Repair) automatically calculated
-
-### ✅ Severity Handling
-
-* P0 → Database failures
-* P1 → Cache failures
-* P2 → Other components
-
-### ✅ Dashboard
-
-* Live incident feed
-* Sorted by severity
-* RCA details visible
-
-### ✅ Observability
-
-* `/health` endpoint
-* Console metrics (signals count every 5 sec)
-
-### ✅ Rate Limiting
-
-* Prevents overload using request throttling
-
----
-
-## 🚀 Setup Instructions
-
-### 1. Clone Repository
-
-```
-git clone <your-repo-link>
-cd incident-management-system
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
 ```
 
 ---
 
-### 2. Backend Setup
+### 2. Backend Dockerfile
 
-```
-cd backend
-python -m venv venv
-venv\Scripts\activate
-pip install fastapi uvicorn
-uvicorn main:app --reload
+```dockerfile
+FROM python:3.10
+
+WORKDIR /app
+COPY . .
+RUN pip install fastapi uvicorn
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-Backend runs at:
+---
+
+### 3. Frontend Dockerfile
+
+```dockerfile
+FROM node:18
+
+WORKDIR /app
+COPY . .
+RUN npm install
+
+CMD ["npm", "start"]
+```
+
+---
+
+### 4. Run Application
+
+```bash
+docker-compose up --build
+```
+
+Backend:
 
 ```
 http://127.0.0.1:8000/docs
 ```
 
----
-
-### 3. Frontend Setup
-
-```
-cd frontend
-npm install
-npm start
-```
-
-Frontend runs at:
+Frontend:
 
 ```
 http://localhost:3000
@@ -119,49 +155,118 @@ http://localhost:3000
 
 ---
 
-## 🧪 Sample Test Flow
+## ⚡ Backpressure Handling
 
-1. Create Signal:
+Backpressure is handled using multiple strategies:
 
-   * Component: `DB_MAIN`
-   * Message: `Database crash`
+### 1. Rate Limiting
 
-2. View Incident in dashboard
+* Limits ingestion to 100 requests/sec
+* Prevents API overload
 
-3. Add RCA:
+### 2. Queue-Based Processing
 
-   * Root Cause: DB failure
-   * Fix: Restart service
+* Signals are added to a queue
+* Processed asynchronously
+* Avoids blocking API requests
 
-4. Close Incident
+### 3. Debounce Logic
+
+* Groups repeated signals into one incident
+* Reduces noise and improves efficiency
+
+### Why It Matters
+
+These mechanisms ensure:
+
+* Stability under high load
+* Prevention of cascading failures
+* Efficient resource utilization
 
 ---
 
-## ⚡ Backpressure Handling (Important)
+## 🧪 Sample Data (Failure Simulation)
 
-* Implemented basic rate limiting (100 req/sec)
-* Prevents system overload
-* Ensures stability during bursts
+Create `sample_events.json`
+
+```json
+[
+  {"component_id": "DB_MAIN", "message": "Database connection timeout"},
+  {"component_id": "DB_MAIN", "message": "Database crash"},
+  {"component_id": "CACHE_CLUSTER", "message": "Cache latency spike"},
+  {"component_id": "MCP_SERVICE", "message": "Service unavailable"}
+]
+```
 
 ---
 
-## 📊 Metrics
+### Simulation Script
 
-* Signals count logged every 5 seconds
-* Health endpoint available
+```python
+import requests
+
+events = [
+    ("DB_MAIN", "Database crash"),
+    ("DB_MAIN", "Timeout"),
+    ("CACHE_CLUSTER", "Cache spike"),
+    ("MCP_SERVICE", "Service down")
+]
+
+for comp, msg in events:
+    requests.post(
+        f"http://127.0.0.1:8000/ingest?component_id={comp}&message={msg}"
+    )
+```
+
+---
+
+## 🔥 Features
+
+* High-throughput signal ingestion
+* Debounce-based incident creation
+* Lifecycle management (OPEN → CLOSED)
+* Mandatory RCA enforcement
+* MTTR calculation
+* Severity-based prioritization
+* Real-time dashboard
+* Expandable incident details
+* Toast notifications
+
+---
+
+## 🧾 AI Prompts / Design Inputs
+
+### System Design
+
+> Design a scalable incident management system that can handle high-frequency signals and enforce structured RCA before closure.
+
+### Backend
+
+> Implement async ingestion in FastAPI with rate limiting and queue processing.
+
+### Frontend
+
+> Build a React dashboard with live feed, severity sorting, and RCA workflow UI.
+
+### Optimization
+
+> Improve UI/UX to resemble production SaaS dashboards.
 
 ---
 
 ## 🎯 Future Improvements
 
-* Replace in-memory DB with PostgreSQL
-* Add Redis for caching
-* Use Kafka for real-time ingestion
-* Implement authentication
-* Improve UI/UX
+* PostgreSQL integration
+* Redis caching layer
+* Kafka for streaming ingestion
+* Authentication and role-based access
+* Advanced analytics dashboard
 
 ---
 
 ## 👨‍💻 Author
 
 Santhosha Mohananda
+
+---
+
