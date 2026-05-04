@@ -1,49 +1,41 @@
 from fastapi import FastAPI, HTTPException
-from datetime import datetime
-from time import time
-import asyncio
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime, timedelta
+from time import time
 from collections import deque
+import asyncio
 import random
 
 app = FastAPI()
 
-# ----------------------------
-# In-Memory Storage
-# ----------------------------
-signal_queue = deque()
-signals = []       # Raw signal log (for observability)
-incidents = []     # Processed incidents
+# In-memory structures
+signal_queue = deque()     # Incoming signals (acts as buffer)
+signals = []               # Raw signal log (for observability)
+incidents = []             # Processed incidents (source of truth)
 
-# ----------------------------
-# Rate Limiting
-# ----------------------------
+# Rate limiting variables
 request_count = 0
 start_time_window = time()
 
-# ----------------------------
-# Metrics
-# ----------------------------
-async def print_metrics():
-    while True:
-        print(f"Signals processed: {len(signals)}")
-        await asyncio.sleep(5)
-
-# ----------------------------
-# ID Generator
-# ----------------------------
+# Generate simple incremental IDs
 def get_id():
     return len(incidents) + 1
 
-# ----------------------------
-# Retry Logic (Simulated DB Save)
-# ----------------------------
+def get_severity(component_id: str):
+    if "DB" in component_id:
+        return "P0"
+    elif "CACHE" in component_id:
+        return "P1"
+    return "P2"
+
+
+# Simulated database write with retry
 def save_with_retry(incident):
     for _ in range(3):
         try:
-            # Simulate random failure
+            # Simulate occasional failure
             if random.random() < 0.2:
-                raise Exception("Simulated DB failure")
+                raise Exception("Temporary DB failure")
 
             incidents.append(incident)
             return
@@ -51,17 +43,23 @@ def save_with_retry(incident):
             continue
 
     raise Exception("Failed to save incident after retries")
+# def get_severity(component_id):
+#     if "DB" in component_id:
+#         return "P0"
+#     elif "CACHE" in component_id:
+#         return "P1"
+#     return "P2"
 
-# ----------------------------
-# 1. Ingest Signals (Producer)
-# ----------------------------
+# # severity = get_severity(component_id)
+
+# API to ingest signals
 @app.post("/ingest")
 async def ingest_signal(component_id: str, message: str):
-
     global request_count, start_time_window
 
     current_time = time()
 
+    # Reset rate counter every second
     if current_time - start_time_window > 1:
         request_count = 0
         start_time_window = current_time
@@ -77,117 +75,131 @@ async def ingest_signal(component_id: str, message: str):
         "timestamp": datetime.now()
     }
 
-    # Push to queue (async processing)
+    # Add signal to queue for async processing
     signal_queue.append(signal)
 
     return {"message": "Signal queued"}
 
-# ----------------------------
-# Queue Worker (Consumer)
-# ----------------------------
+
+# Background worker to process signals
 async def process_queue():
     while True:
         if signal_queue:
             signal = signal_queue.popleft()
 
-            # Store raw signal (observability)
+            # Store raw signal for monitoring
             signals.append(signal)
 
             component_id = signal["component_id"]
 
-            # Debounce logic
+            # Check if an active incident already exists
             existing = next(
-                (i for i in incidents if i["component_id"] == component_id and i["status"] != "CLOSED"),
+                (i for i in incidents
+                 if i["component_id"] == component_id and i["status"] != "CLOSED"),
                 None
             )
 
+            # if existing:
+            #     last_signal_time = existing["signals"][-1]["timestamp"]
+
+                # Debounce: group signals within 10 seconds
             if existing:
-                existing["signals"].append(signal)
+                if datetime.now() - existing["start_time"] < timedelta(seconds=10):
+                    existing["signals"].append(signal)
+                    continue
 
-            else:
-                # Severity assignment
-                severity = "P2"
-                if "DB" in component_id:
-                    severity = "P0"
-                elif "CACHE" in component_id:
-                    severity = "P1"
+            # Create a new incident
+            severity = get_severity(component_id)
 
-                incident = {
-                    "id": get_id(),
-                    "component_id": component_id,
-                    "severity": severity,
-                    "status": "OPEN",
-                    "signals": [signal],
-                    "start_time": datetime.now(),
-                    "end_time": None,
-                    "rca": None
-                }
+            incident = {
+                "id": get_id(),
+                "component_id": component_id,
+                "severity": severity,
+                "status": "OPEN",
+                "signals": [signal],
+                "start_time": datetime.now(),
+                "end_time": None,
+                "rca": None
+            }
 
-                # Save with retry
-                save_with_retry(incident)
+            save_with_retry(incident)
 
         await asyncio.sleep(0.01)
 
-# ----------------------------
-# Startup Tasks
-# ----------------------------
+
+
+# Periodically print throughput metrics
+async def print_metrics():
+    previous_count = 0
+
+    while True:
+        current_count = len(signals)
+        rate = current_count - previous_count
+
+        print(f"Signals processed per 5 seconds: {rate}")
+        previous_count = current_count
+
+        await asyncio.sleep(5)
+
+
+# Start background workers
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(process_queue())
+    for _ in range(3):  # multiple workers for better throughput
+        asyncio.create_task(process_queue())
+
     asyncio.create_task(print_metrics())
 
-# ----------------------------
-# 2. Get Incidents
-# ----------------------------
+
+# Fetch all incidents
 @app.get("/incidents")
 async def get_incidents():
     return incidents
 
-# ----------------------------
-# 3. Update Status (State Machine)
-# ----------------------------
+
+# Valid state transitions
 valid_transitions = {
     "OPEN": ["INVESTIGATING"],
     "INVESTIGATING": ["RESOLVED"],
     "RESOLVED": ["CLOSED"]
 }
 
+
+# Update incident status
 @app.put("/incident/{incident_id}/status")
 async def update_status(incident_id: int, status: str):
-
     incident = next((i for i in incidents if i["id"] == incident_id), None)
 
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
-    current = incident["status"]
+    current_status = incident["status"]
 
-    if status not in valid_transitions.get(current, []):
+    # Enforce valid transitions
+    if status not in valid_transitions.get(current_status, []):
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid transition from {current} → {status}"
+            detail=f"Invalid transition from {current_status} → {status}"
         )
 
+    # Ensure RCA exists before closing
     if status == "CLOSED" and not incident["rca"]:
-        raise HTTPException(status_code=400, detail="RCA required")
+        raise HTTPException(status_code=400, detail="RCA required before closing")
 
     incident["status"] = status
 
     return {"message": f"Moved to {status}"}
 
-# ----------------------------
-# 4. Add RCA + MTTR
-# ----------------------------
+
+# Add RCA and calculate MTTR
 @app.post("/incident/{incident_id}/rca")
 async def add_rca(incident_id: int, root_cause: str, fix: str):
-
     incident = next((i for i in incidents if i["id"] == incident_id), None)
 
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
     end_time = datetime.now()
-
     mttr = (end_time - incident["start_time"]).total_seconds()
 
     incident["rca"] = {
@@ -201,13 +213,8 @@ async def add_rca(incident_id: int, root_cause: str, fix: str):
 
     return {"message": "RCA added", "mttr_seconds": mttr}
 
-# ----------------------------
-# Health & Root
-# ----------------------------
-@app.get("/")
-def home():
-    return {"message": "IMS Backend Running"}
 
+# Basic health check
 @app.get("/health")
 async def health():
     return {
@@ -216,9 +223,21 @@ async def health():
         "total_incidents": len(incidents)
     }
 
-# ----------------------------
-# CORS
-# ----------------------------
+
+# Root endpoint
+@app.get("/")
+def home():
+    return {"message": "IMS Backend Running"}
+
+@app.get("/metrics")
+async def metrics():
+    return {
+        "total_signals": len(signals),
+        "total_incidents": len(incidents),
+    }
+
+
+# Enable frontend access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
