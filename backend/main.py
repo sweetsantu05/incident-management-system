@@ -1,35 +1,59 @@
 from fastapi import FastAPI, HTTPException
 from datetime import datetime
-from typing import List
 from time import time
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
+from collections import deque
+import random
 
 app = FastAPI()
 
-#for time line 
+# ----------------------------
+# In-Memory Storage
+# ----------------------------
+signal_queue = deque()
+signals = []       # Raw signal log (for observability)
+incidents = []     # Processed incidents
 
+# ----------------------------
+# Rate Limiting
+# ----------------------------
 request_count = 0
 start_time_window = time()
 
-# In-memory storage (for simplicity)
-signals = []
-incidents = []
-
-
+# ----------------------------
+# Metrics
+# ----------------------------
 async def print_metrics():
     while True:
-        print(f"Signals received: {len(signals)}")
+        print(f"Signals processed: {len(signals)}")
         await asyncio.sleep(5)
 
-
-
-# Simple ID generator
+# ----------------------------
+# ID Generator
+# ----------------------------
 def get_id():
     return len(incidents) + 1
 
 # ----------------------------
-# 1. Ingest Signals
+# Retry Logic (Simulated DB Save)
+# ----------------------------
+def save_with_retry(incident):
+    for _ in range(3):
+        try:
+            # Simulate random failure
+            if random.random() < 0.2:
+                raise Exception("Simulated DB failure")
+
+            incidents.append(incident)
+            return
+        except:
+            continue
+
+    raise Exception("Failed to save incident after retries")
+
+# ----------------------------
+# 1. Ingest Signals (Producer)
 # ----------------------------
 @app.post("/ingest")
 async def ingest_signal(component_id: str, message: str):
@@ -38,7 +62,6 @@ async def ingest_signal(component_id: str, message: str):
 
     current_time = time()
 
-    # reset every 1 second
     if current_time - start_time_window > 1:
         request_count = 0
         start_time_window = current_time
@@ -54,26 +77,64 @@ async def ingest_signal(component_id: str, message: str):
         "timestamp": datetime.now()
     }
 
-    signals.append(signal)
+    # Push to queue (async processing)
+    signal_queue.append(signal)
 
-    # Debounce logic (simplified)
-    existing = next((i for i in incidents if i["component_id"] == component_id and i["status"] != "CLOSED"), None)
+    return {"message": "Signal queued"}
 
-    if existing:
-        existing["signals"].append(signal)
-    else:
-        incident = {
-            "id": get_id(),
-            "component_id": component_id,
-            "status": "OPEN",
-            "signals": [signal],
-            "start_time": datetime.now(),
-            "end_time": None,
-            "rca": None
-        }
-        incidents.append(incident)
+# ----------------------------
+# Queue Worker (Consumer)
+# ----------------------------
+async def process_queue():
+    while True:
+        if signal_queue:
+            signal = signal_queue.popleft()
 
-    return {"message": "Signal processed"}
+            # Store raw signal (observability)
+            signals.append(signal)
+
+            component_id = signal["component_id"]
+
+            # Debounce logic
+            existing = next(
+                (i for i in incidents if i["component_id"] == component_id and i["status"] != "CLOSED"),
+                None
+            )
+
+            if existing:
+                existing["signals"].append(signal)
+
+            else:
+                # Severity assignment
+                severity = "P2"
+                if "DB" in component_id:
+                    severity = "P0"
+                elif "CACHE" in component_id:
+                    severity = "P1"
+
+                incident = {
+                    "id": get_id(),
+                    "component_id": component_id,
+                    "severity": severity,
+                    "status": "OPEN",
+                    "signals": [signal],
+                    "start_time": datetime.now(),
+                    "end_time": None,
+                    "rca": None
+                }
+
+                # Save with retry
+                save_with_retry(incident)
+
+        await asyncio.sleep(0.01)
+
+# ----------------------------
+# Startup Tasks
+# ----------------------------
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(process_queue())
+    asyncio.create_task(print_metrics())
 
 # ----------------------------
 # 2. Get Incidents
@@ -83,8 +144,14 @@ async def get_incidents():
     return incidents
 
 # ----------------------------
-# 3. Update Status
+# 3. Update Status (State Machine)
 # ----------------------------
+valid_transitions = {
+    "OPEN": ["INVESTIGATING"],
+    "INVESTIGATING": ["RESOLVED"],
+    "RESOLVED": ["CLOSED"]
+}
+
 @app.put("/incident/{incident_id}/status")
 async def update_status(incident_id: int, status: str):
 
@@ -93,16 +160,23 @@ async def update_status(incident_id: int, status: str):
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
-    if status == "CLOSED":
-        if not incident["rca"] or not incident["rca"].get("root_cause") or not incident["rca"].get("fix"):
-            raise HTTPException(status_code=400, detail="Complete RCA required before closing")
+    current = incident["status"]
+
+    if status not in valid_transitions.get(current, []):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid transition from {current} → {status}"
+        )
+
+    if status == "CLOSED" and not incident["rca"]:
+        raise HTTPException(status_code=400, detail="RCA required")
 
     incident["status"] = status
 
-    return {"message": "Status updated"}
+    return {"message": f"Moved to {status}"}
 
 # ----------------------------
-# 4. Add RCA
+# 4. Add RCA + MTTR
 # ----------------------------
 @app.post("/incident/{incident_id}/rca")
 async def add_rca(incident_id: int, root_cause: str, fix: str):
@@ -114,7 +188,6 @@ async def add_rca(incident_id: int, root_cause: str, fix: str):
 
     end_time = datetime.now()
 
-    # MTTR calculation
     mttr = (end_time - incident["start_time"]).total_seconds()
 
     incident["rca"] = {
@@ -128,6 +201,9 @@ async def add_rca(incident_id: int, root_cause: str, fix: str):
 
     return {"message": "RCA added", "mttr_seconds": mttr}
 
+# ----------------------------
+# Health & Root
+# ----------------------------
 @app.get("/")
 def home():
     return {"message": "IMS Backend Running"}
@@ -140,10 +216,9 @@ async def health():
         "total_incidents": len(incidents)
     }
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(print_metrics())
-
+# ----------------------------
+# CORS
+# ----------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
