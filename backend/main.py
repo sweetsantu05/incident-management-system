@@ -193,26 +193,45 @@ async def update_status(incident_id: int, status: str):
 
 # Add RCA and calculate MTTR
 @app.post("/incident/{incident_id}/rca")
-async def add_rca(incident_id: int, root_cause: str, fix: str):
+async def add_rca(
+    incident_id: int,
+    root_cause: str,
+    fix: str,
+    category: str = None,
+    start: str = None,
+    end: str = None,
+    prevention: str = None
+):
+    # Find incident
     incident = next((i for i in incidents if i["id"] == incident_id), None)
 
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
+    # Use current time as end_time (system recorded)
     end_time = datetime.now()
+
+    # MTTR calculation
     mttr = (end_time - incident["start_time"]).total_seconds()
 
+    # Store RCA with all fields
     incident["rca"] = {
         "root_cause": root_cause,
         "fix": fix,
+        "category": category,
+        "start": start,
+        "end": end,
+        "prevention": prevention,
         "time": end_time,
         "mttr_seconds": mttr
     }
 
     incident["end_time"] = end_time
 
-    return {"message": "RCA added", "mttr_seconds": mttr}
-
+    return {
+        "message": "RCA added",
+        "mttr_seconds": mttr
+    }
 
 # Basic health check
 @app.get("/health")

@@ -22,7 +22,7 @@ The goal is to simulate how production systems maintain **reliability, stability
 
 ## 🏗️ Architecture
 
-![Architecture Diagram](architecture.svg)
+![Architecture Diagram ``](image-1.png)
 
 ### System Flow
 

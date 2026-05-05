@@ -7,7 +7,14 @@ function App() {
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [showRCAForm, setShowRCAForm] = useState(null);
   const [showRCADetails, setShowRCADetails] = useState(null);
-  const [rcaData, setRcaData] = useState({ root: "", fix: "" });
+  const [rcaData, setRcaData] = useState({
+  root: "",
+  fix: "",
+  category: "",
+  start: "",
+  end: "",
+  prevention: ""
+  });
   const [view, setView] = useState("ACTIVE");
   const [toast, setToast] = useState("");
   
@@ -99,9 +106,9 @@ function App() {
     }
 
     await fetch(
-      `http://127.0.0.1:8000/incident/${id}/rca?root_cause=${rcaData.root}&fix=${rcaData.fix}`,
-      { method: "POST" }
-    );
+    `http://127.0.0.1:8000/incident/${id}/rca?root_cause=${rcaData.root}&fix=${rcaData.fix}&category=${rcaData.category}&start=${rcaData.start}&end=${rcaData.end}&prevention=${rcaData.prevention}`,
+    { method: "POST" }
+  );
 
     showToast("RCA Added");
     setShowRCAForm(null);
