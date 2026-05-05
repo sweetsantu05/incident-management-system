@@ -19,34 +19,9 @@ The goal is to simulate how production systems maintain **reliability, stability
 ## 🏗️ Architecture Diagram
 
 
-![alt text](image-1.png)
+![Architecture Diagram](image.png)
 
-Frontend (React Dashboard)
-        ↓
-FastAPI Backend (Async API)
-        ↓
-----------------------------
-| Signal Queue (Buffer)     |
-| - Handles bursts          |
-----------------------------
-        ↓
-----------------------------
-| Processing Engine         |
-| - Debounce Logic          |
-| - Incident Creation       |
-----------------------------
-        ↓
-----------------------------
-| In-Memory Storage         |
-| - Signals (Raw)           |
-| - Incidents (Structured)  |
-----------------------------
-        ↓
-----------------------------
-| Observability Layer       |
-| - /health endpoint        |
-| - Metrics logging         |
-----------------------------
+
 ```
 
 ---
