@@ -141,8 +141,9 @@ function App() {
         </div>
       )}
 
-      <h1 style={{ color: "#2c3e50" }}> Incident Dashboard</h1>
-      
+      <h1 style={{ color: "#222e39", fontSize: "40px", marginBottom: "1" }}>
+        Incident Dashboard
+      </h1>
 
       {/* Input Card */}
       <div
@@ -407,6 +408,7 @@ function App() {
           <label style={{ fontSize: "13px" }}>Incident Start Time</label>
           <input
             type="datetime-local"
+            value={rcaData.start || ""}
             onChange={(e) =>
               setRcaData({ ...rcaData, start: e.target.value })
             }
@@ -421,6 +423,7 @@ function App() {
           <label style={{ fontSize: "13px" }}>Incident End Time</label>
           <input
             type="datetime-local"
+            value={rcaData.end || ""}
             onChange={(e) =>
               setRcaData({ ...rcaData, end: e.target.value })
             }
